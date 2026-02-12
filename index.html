@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Wargames Vector Screen</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="frame">
+    <header class="topbar">
+      <div class="brand">WOPR VECTOR DISPLAY</div>
+      <div class="meta">
+        <span id="clock">00:00:00</span>
+        <span class="dot"></span>
+        <span id="seedLabel">SEED: 000000</span>
+      </div>
+    </header>
+
+    <main class="screen" id="screen">
+      <!-- SVG vectors -->
+      <svg id="v" viewBox="0 0 1000 700" preserveAspectRatio="none" aria-label="vector display">
+        <defs>
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="1.2" result="b"/>
+            <feMerge>
+              <feMergeNode in="b"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+
+          <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="rgba(0,255,120,0)" />
+            <stop offset="0.5" stop-color="rgba(0,255,120,0.10)" />
+            <stop offset="1" stop-color="rgba(0,255,120,0)" />
+          </linearGradient>
+        </defs>
+
+        <!-- content groups -->
+        <g id="gGrid" filter="url(#glow)"></g>
+        <g id="gWorld" filter="url(#glow)"></g>
+        <g id="gNet"  filter="url(#glow)"></g>
+        <g id="gHUD"  filter="url(#glow)"></g>
+
+        <!-- scan sweep (animated via JS) -->
+        <rect id="scanSweep" x="-300" y="0" width="300" height="700" fill="url(#sweep)" opacity="0.7"></rect>
+      </svg>
+
+      <!-- CRT overlays -->
+      <div class="overlay scanlines"></div>
+      <div class="overlay vignette"></div>
+      <div class="overlay noise" id="noise"></div>
+    </main>
+
+    <footer class="controls">
+      <button id="regen">Regenerate</button>
+      <button id="pause">Pause</button>
+
+      <label>
+        Density
+        <input id="density" type="range" min="0.5" max="2.5" step="0.1" value="1.2" />
+      </label>
+
+      <label>
+        Flicker
+        <input id="flicker" type="range" min="0" max="1" step="0.05" value="0.25" />
+      </label>
+
+      <label>
+        Seed
+        <input id="seed" type="text" inputmode="numeric" placeholder="auto" />
+      </label>
+    </footer>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
