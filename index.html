@@ -37,10 +37,12 @@
         </defs>
 
         <!-- content groups -->
-        <g id="gGrid" filter="url(#glow)"></g>
-        <g id="gWorld" filter="url(#glow)"></g>
-        <g id="gNet"  filter="url(#glow)"></g>
-        <g id="gHUD"  filter="url(#glow)"></g>
+      <!-- content groups -->
+      <g id="gGrid"  filter="url(#glow)"></g>
+      <g id="gMap"   filter="url(#glow)"></g>
+      <g id="gLinks" filter="url(#glow)"></g>
+      <g id="gHUD"   filter="url(#glow)"></g>
+
 
         <!-- scan sweep (animated via JS) -->
         <rect id="scanSweep" x="-300" y="0" width="300" height="700" fill="url(#sweep)" opacity="0.7"></rect>
@@ -64,6 +66,11 @@
       <label>
         Flicker
         <input id="flicker" type="range" min="0" max="1" step="0.05" value="0.25" />
+      </label>
+      
+      <label>
+        Links
+        <input id="links" type="range" min="0" max="24" step="1" value="10" />
       </label>
 
       <label>
