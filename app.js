@@ -1,614 +1,579 @@
-// Procedural Wargames-ish SVG screen, refocused to "Cold War strategic map" vibe.
-// No dependencies.
+/* ============================================================
+   WOPR — STRATEGIC AIR COMMAND  (app.js)
+   WarGames war-room vector map. Vanilla JS, no build, no deps.
 
-const svg = document.getElementById("v");
-const gGrid  = document.getElementById("gGrid");
-const gMap   = document.getElementById("gMap");
-const gLinks = document.getElementById("gLinks");
-const gHUD   = document.getElementById("gHUD");
+   Green phosphor on black everywhere EXCEPT the live USGS
+   earthquake markers/readout, which are the single colour accent.
 
-const regenBtn   = document.getElementById("regen");
-const pauseBtn   = document.getElementById("pause");
-const densityEl  = document.getElementById("density");
-const flickerEl  = document.getElementById("flicker");
-const linksEl    = document.getElementById("links");
-const seedEl     = document.getElementById("seed");
-const seedLabel  = document.getElementById("seedLabel");
-const clockEl    = document.getElementById("clock");
-const scanSweep  = document.getElementById("scanSweep");
-const noise      = document.getElementById("noise");
+   External calls: ONE — the public USGS all_hour quake feed.
+   No keys, no trackers, no PII. Degrades gracefully if offline.
+   ============================================================ */
 
-let paused = false;
-let sweepX = -300;
+"use strict";
 
-let rng = null;
-let activeLinks = [];
-let spawnTimer = 0;
-let lastT = performance.now();
+/* ---------------- DOM ---------------- */
+const svg      = document.getElementById("v");
+const gGrid    = document.getElementById("gGrid");
+const gMap     = document.getElementById("gMap");
+const gLinks   = document.getElementById("gLinks");
+const gCities  = document.getElementById("gCities");
+const gQuakes  = document.getElementById("gQuakes");
+const gHUD     = document.getElementById("gHUD");
+const scanSweep= document.getElementById("scanSweep");
+const noise    = document.getElementById("noise");
 
-// ---------- RNG (seeded) ----------
-function xmur3(str){
-  let h = 1779033703 ^ str.length;
-  for (let i = 0; i < str.length; i++){
-    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
-    h = (h << 13) | (h >>> 19);
-  }
-  return function(){
-    h = Math.imul(h ^ (h >>> 16), 2246822507);
-    h = Math.imul(h ^ (h >>> 13), 3266489909);
-    h ^= (h >>> 16);
-    return h >>> 0;
-  };
-}
-function sfc32(a,b,c,d){
-  return function(){
-    a >>>= 0; b >>>= 0; c >>>= 0; d >>>= 0;
-    let t = (a + b) | 0;
-    a = b ^ (b >>> 9);
-    b = (c + (c << 3)) | 0;
-    c = (c << 21) | (c >>> 11);
-    d = (d + 1) | 0;
-    t = (t + d) | 0;
-    c = (c + t) | 0;
-    return (t >>> 0) / 4294967296;
-  };
-}
-function makeRng(seedStr){
-  const seedFn = xmur3(seedStr);
-  return sfc32(seedFn(), seedFn(), seedFn(), seedFn());
-}
+const clockEl     = document.getElementById("clock");
+const defconEl    = document.getElementById("defcon");
+const defconNumEl = document.getElementById("defconNum");
+const sysReadout  = document.getElementById("sysReadout");
+const trafficRead = document.getElementById("trafficReadout");
+const targetRead  = document.getElementById("targetReadout");
+const quakeList   = document.getElementById("quakeList");
+const seisLive    = document.getElementById("seisLive");
+const bargraph    = document.getElementById("bargraph");
+const counters    = document.getElementById("counters");
+const teletype    = document.getElementById("teletype");
 
-function pick(r, arr){ return arr[Math.floor(r() * arr.length)]; }
-function rrange(r, a, b){ return a + (b - a) * r(); }
-function irange(r, a, b){ return Math.floor(rrange(r, a, b + 1)); }
-function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+const pauseBtn  = document.getElementById("pause");
+const strikeBtn = document.getElementById("strike");
 
-// ---------- SVG helpers ----------
-function clearNode(node){
-  while (node.firstChild) node.removeChild(node.firstChild);
-}
-function el(name, attrs = {}){
-  const n = document.createElementNS("http://www.w3.org/2000/svg", name);
-  for (const [k,v] of Object.entries(attrs)) n.setAttribute(k, String(v));
-  return n;
-}
+const reduceMotion = window.matchMedia &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// ---------- Map projection ----------
-const W = 1000;
-const H = 700;
+/* ---------------- View geometry ---------------- */
+const W = 1000, H = 540;
+/* The map occupies an inset rectangle so HUD furniture has margins. */
+const MAP = { x: 18, y: 26, w: W - 36, h: H - 78 };
 
+/* Equirectangular projection. lon[-180,180] lat[-85,85] -> screen. */
+const LAT_LIMIT = 84;
 function project(lat, lon){
-  // Equirectangular projection
-  const x = ((lon + 180) / 360) * W;
-  const y = ((90 - lat) / 180) * H;
+  const x = MAP.x + ((lon + 180) / 360) * MAP.w;
+  const y = MAP.y + ((LAT_LIMIT - lat) / (2 * LAT_LIMIT)) * MAP.h;
   return { x, y };
 }
 
-// ---------- "Capital" set (approx lat/lon) ----------
+/* ---------------- SVG helpers ---------------- */
+function clearNode(n){ while (n.firstChild) n.removeChild(n.firstChild); }
+function el(name, attrs){
+  const n = document.createElementNS("http://www.w3.org/2000/svg", name);
+  if (attrs) for (const k in attrs) n.setAttribute(k, String(attrs[k]));
+  return n;
+}
+function rand(a, b){ return a + Math.random() * (b - a); }
+function irand(a, b){ return Math.floor(rand(a, b + 1)); }
+function pick(arr){ return arr[Math.floor(Math.random() * arr.length)]; }
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+/* ============================================================
+   CITIES — real lat/long. Plotted at true geographic position.
+   ============================================================ */
 const CITIES = [
-  { name:"London",       lat: 51.507, lon:  -0.128 },
-  { name:"Paris",        lat: 48.857, lon:   2.352 },
-  { name:"Berlin",       lat: 52.520, lon:  13.405 },
-  { name:"Rome",         lat: 41.903, lon:  12.496 },
-  { name:"Madrid",       lat: 40.417, lon:  -3.704 },
-  { name:"Oslo",         lat: 59.913, lon:  10.752 },
-  { name:"Stockholm",    lat: 59.330, lon:  18.069 },
-  { name:"Helsinki",     lat: 60.170, lon:  24.938 },
-  { name:"Warsaw",       lat: 52.230, lon:  21.012 },
-  { name:"Prague",       lat: 50.075, lon:  14.438 },
-  { name:"Vienna",       lat: 48.208, lon:  16.373 },
-  { name:"Athens",       lat: 37.984, lon:  23.728 },
-  { name:"Ankara",       lat: 39.933, lon:  32.860 },
-  { name:"Cairo",        lat: 30.044, lon:  31.236 },
-  { name:"Riyadh",       lat: 24.713, lon:  46.676 },
-  { name:"Tehran",       lat: 35.690, lon:  51.389 },
-  { name:"New Delhi",    lat: 28.614, lon:  77.209 },
-  { name:"Islamabad",    lat: 33.693, lon:  73.065 },
-  { name:"Beijing",      lat: 39.904, lon: 116.407 },
-  { name:"Tokyo",        lat: 35.676, lon: 139.650 },
-  { name:"Seoul",        lat: 37.566, lon: 126.978 },
-  { name:"Bangkok",      lat: 13.756, lon: 100.502 },
-  { name:"Jakarta",      lat:  -6.208, lon: 106.845 },
-  { name:"Canberra",     lat: -35.280, lon: 149.130 },
-  { name:"Wellington",   lat: -41.286, lon: 174.776 },
-  { name:"Ottawa",       lat: 45.421, lon: -75.697 },
-  { name:"Mexico City",  lat: 19.432, lon: -99.133 },
-  { name:"Brasilia",     lat: -15.794, lon: -47.883 },
-  { name:"Buenos Aires", lat: -34.603, lon: -58.381 },
-  { name:"Santiago",     lat: -33.449, lon: -70.669 },
-  { name:"Lima",         lat: -12.046, lon: -77.043 },
-  { name:"Bogota",       lat:  4.711, lon: -74.072 },
-  { name:"Pretoria",     lat: -25.747, lon:  28.229 },
-  { name:"Nairobi",      lat:  -1.286, lon:  36.817 }
+  { name:"WASHINGTON",  lat: 38.895, lon: -77.037 },
+  { name:"NEW YORK",    lat: 40.713, lon: -74.006 },
+  { name:"LOS ANGELES", lat: 34.052, lon:-118.244 },
+  { name:"CHICAGO",     lat: 41.878, lon: -87.630 },
+  { name:"OTTAWA",      lat: 45.421, lon: -75.697 },
+  { name:"MEXICO CITY", lat: 19.432, lon: -99.133 },
+  { name:"BOGOTA",      lat:  4.711, lon: -74.072 },
+  { name:"LIMA",        lat:-12.046, lon: -77.043 },
+  { name:"BRASILIA",    lat:-15.794, lon: -47.883 },
+  { name:"BUENOS AIRES",lat:-34.603, lon: -58.381 },
+  { name:"LONDON",      lat: 51.507, lon:  -0.128 },
+  { name:"PARIS",       lat: 48.857, lon:   2.352 },
+  { name:"MADRID",      lat: 40.417, lon:  -3.704 },
+  { name:"BERLIN",      lat: 52.520, lon:  13.405 },
+  { name:"ROME",        lat: 41.903, lon:  12.496 },
+  { name:"OSLO",        lat: 59.913, lon:  10.752 },
+  { name:"MOSCOW",      lat: 55.756, lon:  37.617 },
+  { name:"KYIV",        lat: 50.450, lon:  30.523 },
+  { name:"ANKARA",      lat: 39.933, lon:  32.860 },
+  { name:"CAIRO",       lat: 30.044, lon:  31.236 },
+  { name:"RIYADH",      lat: 24.713, lon:  46.676 },
+  { name:"TEHRAN",      lat: 35.690, lon:  51.389 },
+  { name:"NAIROBI",     lat: -1.286, lon:  36.817 },
+  { name:"PRETORIA",    lat:-25.747, lon:  28.229 },
+  { name:"NEW DELHI",   lat: 28.614, lon:  77.209 },
+  { name:"ISLAMABAD",   lat: 33.693, lon:  73.065 },
+  { name:"BEIJING",     lat: 39.904, lon: 116.407 },
+  { name:"SHANGHAI",    lat: 31.230, lon: 121.474 },
+  { name:"TOKYO",       lat: 35.676, lon: 139.650 },
+  { name:"SEOUL",       lat: 37.566, lon: 126.978 },
+  { name:"SINGAPORE",   lat:  1.352, lon: 103.820 },
+  { name:"JAKARTA",     lat: -6.208, lon: 106.845 },
+  { name:"CANBERRA",    lat:-35.280, lon: 149.130 },
+  { name:"WELLINGTON",  lat:-41.286, lon: 174.776 },
+  { name:"HONOLULU",    lat: 21.307, lon:-157.858 },
+  { name:"ANCHORAGE",   lat: 61.218, lon:-149.900 },
+  { name:"REYKJAVIK",   lat: 64.147, lon: -21.942 }
 ];
 
-// ---------- Drawing: Grid & Graticule ----------
-function drawGrid(r, density){
+/* ============================================================
+   DRAW: graticule + coastlines (real Natural Earth data)
+   ============================================================ */
+function drawGrid(){
   clearNode(gGrid);
-
-  const major = 100;
-  const minor = 20;
-
-  // Minor grid
-  for (let x = 0; x <= W; x += minor){
+  /* faint lat/long graticule */
+  for (let lon = -180; lon <= 180; lon += 20){
+    const a = project(0, lon);
     gGrid.appendChild(el("line", {
-      x1:x, y1:0, x2:x, y2:H,
-      stroke:"rgba(0,255,120,0.07)",
-      "stroke-width":1
+      x1:a.x, y1:MAP.y, x2:a.x, y2:MAP.y+MAP.h,
+      stroke:"rgba(54,255,122,0.06)", "stroke-width":1
     }));
   }
-  for (let y = 0; y <= H; y += minor){
+  for (let lat = -80; lat <= 80; lat += 20){
+    const a = project(lat, 0);
     gGrid.appendChild(el("line", {
-      x1:0, y1:y, x2:W, y2:y,
-      stroke:"rgba(0,255,120,0.07)",
-      "stroke-width":1
+      x1:MAP.x, y1:a.y, x2:MAP.x+MAP.w, y2:a.y,
+      stroke:"rgba(54,255,122,0.06)", "stroke-width":1
     }));
   }
-
-  // Major grid
-  for (let x = 0; x <= W; x += major){
-    gGrid.appendChild(el("line", {
-      x1:x, y1:0, x2:x, y2:H,
-      stroke:"rgba(0,255,120,0.14)",
-      "stroke-width":1.2
-    }));
-  }
-  for (let y = 0; y <= H; y += major){
-    gGrid.appendChild(el("line", {
-      x1:0, y1:y, x2:W, y2:y,
-      stroke:"rgba(0,255,120,0.14)",
-      "stroke-width":1.2
-    }));
-  }
-
-  // Random crosshair markers
-  const n = Math.floor(8 * density);
-  for (let i = 0; i < n; i++){
-    const cx = irange(r, 80, 920);
-    const cy = irange(r, 80, 620);
-    const s = rrange(r, 10, 26);
-
-    gGrid.appendChild(el("line", { x1:cx - s, y1:cy, x2:cx + s, y2:cy, stroke:"rgba(0,255,120,0.18)", "stroke-width":1 }));
-    gGrid.appendChild(el("line", { x1:cx, y1:cy - s, x2:cx, y2:cy + s, stroke:"rgba(0,255,120,0.18)", "stroke-width":1 }));
-    gGrid.appendChild(el("circle", { cx, cy, r: rrange(r, 14, 28), fill:"none", stroke:"rgba(0,255,120,0.10)", "stroke-width":1 }));
-  }
+  /* equator + prime meridian a touch brighter */
+  const eq = project(0,0);
+  gGrid.appendChild(el("line", { x1:MAP.x, y1:eq.y, x2:MAP.x+MAP.w, y2:eq.y,
+    stroke:"rgba(54,255,122,0.12)", "stroke-width":1, "stroke-dasharray":"2 6" }));
+  gGrid.appendChild(el("line", { x1:eq.x, y1:MAP.y, x2:eq.x, y2:MAP.y+MAP.h,
+    stroke:"rgba(54,255,122,0.12)", "stroke-width":1, "stroke-dasharray":"2 6" }));
 }
 
-function drawGraticule(){
-  // Latitude/longitude lines (world map feel)
-  const latStep = 15;
-  const lonStep = 20;
-
-  for (let lat = -75; lat <= 75; lat += latStep){
-    const y = project(lat, 0).y;
-    gMap.appendChild(el("line", {
-      x1:0, y1:y, x2:W, y2:y,
-      stroke:"rgba(0,255,120,0.08)",
-      "stroke-width":1,
-      "stroke-dasharray":"3 5"
-    }));
-  }
-
-  for (let lon = -180; lon <= 180; lon += lonStep){
-    const x = project(0, lon).x;
-    gMap.appendChild(el("line", {
-      x1:x, y1:0, x2:x, y2:H,
-      stroke:"rgba(0,255,120,0.08)",
-      "stroke-width":1,
-      "stroke-dasharray":"3 5"
-    }));
-  }
-
-  // A few labels (non-country, just coordinates)
-  const labels = [
-    { lat: 60, lon: -120 }, { lat: 30, lon: 0 }, { lat: 0, lon: 80 }, { lat: -30, lon: -40 }
-  ];
-  for (const p of labels){
-    const pt = project(p.lat, p.lon);
-    const t = el("text", {
-      x: pt.x + 6,
-      y: pt.y - 6,
-      fill: "rgba(0,255,120,0.35)",
-      "font-size": "11"
-    });
-    const ns = p.lat >= 0 ? "N" : "S";
-    const ew = p.lon >= 0 ? "E" : "W";
-    t.textContent = `${Math.abs(p.lat)}${ns} ${Math.abs(p.lon)}${ew}`;
-    gMap.appendChild(t);
-  }
-}
-
-// ---------- Drawing: Stylised world "coasts" (non-political, continent-ish blobs) ----------
-function blobPath(r, cx, cy, rx, ry, points, jag){
-  const pts = [];
-  for (let i = 0; i < points; i++){
-    const a = (i / points) * Math.PI * 2;
-    const n = 1 + rrange(r, -jag, jag);
-    const x = cx + Math.cos(a) * rx * n;
-    const y = cy + Math.sin(a) * ry * n;
-    pts.push([x,y]);
-  }
-  pts.push(pts[0]);
-
-  let d = "";
-  for (let i = 0; i < pts.length; i++){
-    const p = pts[i];
-    d += (i === 0 ? "M " : "L ") + `${p[0].toFixed(1)} ${p[1].toFixed(1)} `;
-  }
-  d += "Z";
-  return d;
-}
-
-function drawWorldCoasts(r){
+function drawCoastlines(){
   clearNode(gMap);
-
-  drawGraticule();
-
-  // A few big “landmasses” placed roughly where continents sit.
-  // They are deliberately stylised and not country-accurate.
-  const masses = [
-    { cx: 260, cy: 260, rx: 210, ry: 130, pts: 18, jag: 0.22 }, // N. America-ish
-    { cx: 330, cy: 420, rx: 120, ry: 170, pts: 16, jag: 0.25 }, // S. America-ish
-    { cx: 560, cy: 260, rx: 260, ry: 140, pts: 22, jag: 0.20 }, // Eurasia-ish
-    { cx: 585, cy: 425, rx: 170, ry: 170, pts: 18, jag: 0.22 }, // Africa-ish
-    { cx: 815, cy: 520, rx: 170, ry: 90,  pts: 16, jag: 0.18 }, // Australia-ish
-    { cx: 740, cy: 330, rx: 110, ry: 70,  pts: 14, jag: 0.20 }, // SE Asia-ish
-    { cx: 930, cy: 250, rx: 80,  ry: 60,  pts: 12, jag: 0.18 }, // Japan-ish
-    { cx: 520, cy: 575, rx: 420, ry: 60,  pts: 20, jag: 0.10 }  // Antarctica-ish band
-  ];
-
-  for (const m of masses){
-    const d = blobPath(r, m.cx, m.cy, m.rx, m.ry, m.pts, m.jag);
-
-    // Coast stroke
-    gMap.appendChild(el("path", {
-      d,
-      fill: "rgba(0,255,120,0.02)",
-      stroke: "rgba(0,255,120,0.20)",
-      "stroke-width": 1.2
-    }));
-
-    // Inner contour lines for “topo map” feel
-    const rings = 2;
-    for (let i = 1; i <= rings; i++){
-      const k = 1 - i * 0.18;
-      const dd = blobPath(r, m.cx, m.cy, m.rx * k, m.ry * k, m.pts, m.jag * 0.65);
-      gMap.appendChild(el("path", {
-        d: dd,
-        fill: "none",
-        stroke: "rgba(0,255,120,0.10)",
-        "stroke-width": 1
-      }));
+  const segs = window.COASTLINE || [];
+  for (let s = 0; s < segs.length; s++){
+    const seg = segs[s];
+    let d = "";
+    for (let i = 0; i < seg.length; i++){
+      const p = project(seg[i][1], seg[i][0]);
+      d += (i === 0 ? "M" : "L") + p.x.toFixed(1) + " " + p.y.toFixed(1) + " ";
     }
-  }
-
-  // A few “exclusion zones” circles to add strategic-map flavour
-  for (let i = 0; i < 6; i++){
-    const cx = rrange(r, 140, 860);
-    const cy = rrange(r, 120, 580);
-    const rr = rrange(r, 26, 60);
-    gMap.appendChild(el("circle", {
-      cx, cy, r: rr,
-      fill: "none",
-      stroke: "rgba(0,255,120,0.10)",
-      "stroke-width": 1,
-      "stroke-dasharray": "4 6"
+    gMap.appendChild(el("path", {
+      d, fill:"none",
+      stroke:"rgba(54,255,122,0.42)",
+      "stroke-width":1,
+      "stroke-linejoin":"round"
     }));
   }
 }
 
-// ---------- Links: animated arcs between capitals ----------
-function arcPath(a, b){
-  // Quadratic curve with a control point lifted "north" for arc feel.
-  const mx = (a.x + b.x) / 2;
-  const my = (a.y + b.y) / 2;
-
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const dist = Math.hypot(dx, dy);
-
-  // Lift proportional to distance; bias upward a bit for drama.
-  const lift = clamp(dist * 0.22, 30, 160);
-  const cx = mx;
-  const cy = my - lift;
-
-  return `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
-}
-
-function pathLengthApprox(a, b){
-  // Simple proxy (used for dash animation), good enough visually.
-  return Math.hypot(b.x - a.x, b.y - a.y) * 1.2;
-}
-
-function makeLink(r){
-  // pick two distinct cities that aren't too close
-  let A, B, tries = 0;
-  do {
-    A = pick(r, CITIES);
-    B = pick(r, CITIES);
-    tries++;
-    if (tries > 30) break;
-  } while (A === B);
-
-  const a = project(A.lat, A.lon);
-  const b = project(B.lat, B.lon);
-
-  const d = arcPath(a, b);
-  const len = pathLengthApprox(a, b);
-
-  const baseOpacity = rrange(r, 0.22, 0.55);
-  const strokeW = rrange(r, 1.0, 1.8);
-
-  const p = el("path", {
-    d,
-    fill: "none",
-    stroke: "rgba(0,255,120,0.30)",
-    "stroke-width": strokeW,
-    "stroke-linecap": "round",
-    "stroke-dasharray": `${len.toFixed(1)} ${len.toFixed(1)}`,
-    "stroke-dashoffset": `${len.toFixed(1)}`,
-    opacity: baseOpacity
-  });
-
-  // endpoints
-  const endA = el("circle", { cx: a.x, cy: a.y, r: 2.5, fill: "rgba(0,255,120,0.65)", opacity: 0.7 });
-  const endB = el("circle", { cx: b.x, cy: b.y, r: 2.5, fill: "rgba(0,255,120,0.65)", opacity: 0.7 });
-
-  // occasional label
-  let label = null;
-  if (r() < 0.35){
-    label = el("text", {
-      x: b.x + 8,
-      y: b.y - 8,
-      fill: "rgba(0,255,120,0.40)",
-      "font-size": "11"
-    });
-    label.textContent = `${B.name.toUpperCase()}`;
+/* ============================================================
+   DRAW: cities (POIs) at true positions
+   ============================================================ */
+function drawCities(){
+  clearNode(gCities);
+  for (const c of CITIES){
+    const p = project(c.lat, c.lon);
+    c._x = p.x; c._y = p.y;
+    gCities.appendChild(el("rect", {
+      x:p.x-2, y:p.y-2, width:4, height:4,
+      fill:"none", stroke:"rgba(54,255,122,0.6)", "stroke-width":1
+    }));
+    gCities.appendChild(el("circle", { cx:p.x, cy:p.y, r:1, fill:"rgba(54,255,122,0.85)" }));
   }
+}
 
-  // lifetime and timing (staggered, mixed durations)
-  const duration = rrange(r, 1400, 3200);   // ms to draw
-  const hold     = rrange(r, 600, 1600);    // ms visible after draw
-  const fade     = rrange(r, 700, 1400);    // ms fade out
-  const born = performance.now();
+/* ============================================================
+   MISSILE ARC TRAJECTORIES — grow & cascade
+   ============================================================ */
+let activeLinks = [];
+let trajLog = [];      /* readout for the right rail */
+let launchCount = 0;
+let interceptCount = 0;
 
-  gLinks.appendChild(p);
-  gLinks.appendChild(endA);
-  gLinks.appendChild(endB);
-  if (label) gLinks.appendChild(label);
+function arcPath(a, b){
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  const dist = Math.hypot(b.x - a.x, b.y - a.y);
+  const lift = clamp(dist * 0.34, 26, 150);
+  return { d:`M ${a.x.toFixed(1)} ${a.y.toFixed(1)} Q ${mx.toFixed(1)} ${(my-lift).toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`,
+           cx:mx, cy:my-lift };
+}
 
+function makeLink(){
+  let A, B, t = 0;
+  do { A = pick(CITIES); B = pick(CITIES); t++; } while (A === B && t < 20);
+  const a = { x:A._x, y:A._y }, b = { x:B._x, y:B._y };
+  const arc = arcPath(a, b);
+
+  const path = el("path", {
+    d:arc.d, fill:"none",
+    stroke:"rgba(54,255,122,0.55)",
+    "stroke-width":1.3, "stroke-linecap":"round"
+  });
+  /* dash-grow: use getTotalLength after insert */
+  gLinks.appendChild(path);
+  const len = path.getTotalLength();
+  path.setAttribute("stroke-dasharray", len + " " + len);
+  path.setAttribute("stroke-dashoffset", len);
+
+  /* travelling warhead dot + target reticle (drawn on arrival) */
+  const head = el("circle", { cx:a.x, cy:a.y, r:1.8, fill:"var(--phos)",
+    filter:"url(#glowHot)" });
+  gLinks.appendChild(head);
+  const ring = el("circle", { cx:b.x, cy:b.y, r:0, fill:"none",
+    stroke:"rgba(54,255,122,0.7)", "stroke-width":1.2, opacity:0 });
+  gLinks.appendChild(ring);
+
+  const dur   = reduceMotion ? 2600 : rand(1600, 3200);
+  const hold  = rand(700, 1700);
+  const fade  = rand(900, 1500);
+
+  launchCount++;
+  pushTraj(A.name, B.name);
+
+  return { path, head, ring, arc, len, A, B,
+           born: performance.now(), dur, hold, fade, struck:false };
+}
+
+function pointOnQuad(a, c, b, t){
+  const mt = 1 - t;
   return {
-    p, endA, endB, label,
-    len,
-    born,
-    duration,
-    hold,
-    fade
+    x: mt*mt*a.x + 2*mt*t*c.x + t*t*b.x,
+    y: mt*mt*a.y + 2*mt*t*c.y + t*t*b.y
   };
 }
 
 function updateLinks(now){
-  const target = Number(linksEl.value);
-
-  // spawn timer controls staggering; higher target -> shorter interval
-  const spawnInterval = target <= 0 ? 999999 : clamp(2200 / target, 90, 600);
-
-  spawnTimer += (now - lastT);
-  while (spawnTimer >= spawnInterval){
-    spawnTimer -= spawnInterval;
-
-    if (target > 0 && activeLinks.length < target){
-      activeLinks.push(makeLink(rng));
-    } else if (target > 0 && activeLinks.length >= target){
-      // replace an old link occasionally to keep movement
-      if (rng() < 0.25 && activeLinks.length > 0){
-        const idx = irange(rng, 0, activeLinks.length - 1);
-        killLink(activeLinks[idx]);
-        activeLinks.splice(idx, 1);
-        activeLinks.push(makeLink(rng));
-      }
-    }
-  }
-
-  // animate existing links
   const still = [];
   for (const L of activeLinks){
     const age = now - L.born;
+    const a = { x:L.A._x, y:L.A._y }, b = { x:L.B._x, y:L.B._y };
+    const c = { x:L.arc.cx, y:L.arc.cy };
 
-    if (age <= L.duration){
-      // drawing phase
-      const t = age / L.duration;
-      const dash = L.len * (1 - t);
-      L.p.setAttribute("stroke-dashoffset", dash.toFixed(1));
-
-      const pulse = 0.55 + 0.45 * Math.sin((age / 220) + (L.len / 90));
-      L.endB.setAttribute("opacity", (0.45 + 0.35 * pulse).toFixed(2));
-      still.push(L);
-      continue;
+    if (age <= L.dur){
+      const t = age / L.dur;
+      L.path.setAttribute("stroke-dashoffset", (L.len * (1 - t)).toFixed(1));
+      const pos = pointOnQuad(a, c, b, t);
+      L.head.setAttribute("cx", pos.x.toFixed(1));
+      L.head.setAttribute("cy", pos.y.toFixed(1));
+      still.push(L); continue;
     }
-
-    if (age <= L.duration + L.hold){
-      // hold phase
-      L.p.setAttribute("stroke-dashoffset", "0");
-      still.push(L);
-      continue;
+    if (!L.struck){
+      L.struck = true;
+      L.head.setAttribute("opacity", "0");
+      interceptCount++;
     }
-
-    const fadeAge = age - (L.duration + L.hold);
-    if (fadeAge <= L.fade){
-      // fade out
-      const t = 1 - (fadeAge / L.fade);
-      const o = clamp(t, 0, 1);
-      L.p.setAttribute("opacity", (0.12 + 0.55 * o).toFixed(2));
-      L.endA.setAttribute("opacity", (0.10 + 0.60 * o).toFixed(2));
-      L.endB.setAttribute("opacity", (0.10 + 0.60 * o).toFixed(2));
-      if (L.label) L.label.setAttribute("opacity", (0.10 + 0.45 * o).toFixed(2));
-      still.push(L);
-      continue;
+    if (age <= L.dur + L.hold){
+      /* impact reticle expands */
+      const k = (age - L.dur) / L.hold;
+      L.ring.setAttribute("opacity", (0.8 * (1 - k)).toFixed(2));
+      L.ring.setAttribute("r", (2 + k * 9).toFixed(1));
+      still.push(L); continue;
     }
-
-    // done
+    const f = (age - L.dur - L.hold) / L.fade;
+    if (f <= 1){
+      const o = 1 - f;
+      L.path.setAttribute("opacity", (0.15 + 0.7 * o).toFixed(2));
+      still.push(L); continue;
+    }
     killLink(L);
   }
-
   activeLinks = still;
-
-  // if target reduced, cull extras quickly
-  while (activeLinks.length > target){
-    const L = activeLinks.shift();
-    killLink(L);
-  }
 }
-
 function killLink(L){
-  if (L.p?.parentNode) L.p.parentNode.removeChild(L.p);
-  if (L.endA?.parentNode) L.endA.parentNode.removeChild(L.endA);
-  if (L.endB?.parentNode) L.endB.parentNode.removeChild(L.endB);
-  if (L.label?.parentNode) L.label.parentNode.removeChild(L.label);
+  [L.path, L.head, L.ring].forEach(n => { if (n && n.parentNode) n.parentNode.removeChild(n); });
 }
 
-// ---------- HUD ----------
-function drawHUD(r){
-  clearNode(gHUD);
-
-  // Corner brackets
-  const corners = [
-    [20,20, 120,20, 20,120],
-    [980,20, 880,20, 980,120],
-    [20,680, 120,680, 20,580],
-    [980,680, 880,680, 980,580]
-  ];
-  for (const c of corners){
-    gHUD.appendChild(el("polyline", {
-      points:`${c[0]},${c[1]} ${c[2]},${c[3]} ${c[0]},${c[1]} ${c[4]},${c[5]}`,
-      fill:"none",
-      stroke:"rgba(0,255,120,0.22)",
-      "stroke-width":2
-    }));
+/* Spawn cascade: steady trickle + bursts */
+let spawnTimer = 0;
+function maybeSpawn(dt){
+  if (reduceMotion){
+    /* calm: at most a few, slow */
+    if (activeLinks.length < 3){ spawnTimer += dt; if (spawnTimer > 2600){ spawnTimer = 0; activeLinks.push(makeLink()); } }
+    return;
   }
+  spawnTimer += dt;
+  const interval = clamp(620 - threat * 70, 140, 620);
+  while (spawnTimer >= interval){
+    spawnTimer -= interval;
+    if (activeLinks.length < 14 + threat * 6) activeLinks.push(makeLink());
+  }
+}
+function launchWave(){
+  const n = reduceMotion ? 3 : irand(6, 12);
+  for (let i = 0; i < n; i++) setTimeout(() => activeLinks.push(makeLink()), i * 90);
+  threat = clamp(threat + 1.4, 0, 5);
+}
 
-  // Status blocks
-  const blocks = [
-    { x: 40, y: 560, w: 310, h: 110, title: "SYSTEM STATUS" },
-    { x: 650, y: 560, w: 310, h: 110, title: "ACTIVE LINKS" }
-  ];
+/* ============================================================
+   LIVE WOPR STATS  (look like they make sense)
+   ============================================================ */
+let threat = 1.2;                  /* drives DEFCON + spawn rate, decays */
+let bootMs = performance.now();
+let bandwidth = 1840;
+let trace = "IDLE";
 
-  const statusLines = [
-    () => `CORE: ${pick(r, ["ONLINE", "ONLINE", "DEGRADED"])}`,
-    () => `MEM: ${irange(r, 62, 98)}%`,
-    () => `IO: ${irange(r, 120, 980)} OPS`,
-    () => `LINK: ${pick(r, ["STABLE", "STABLE", "NOISY"])}`,
-    () => `AUTH: ${pick(r, ["OK", "OK", "REVIEW"])}`,
-    () => `TRACE: ${pick(r, ["IDLE", "RUN", "RUN"])}`,
-  ];
+function pushTraj(from, to){
+  const id = "TK-" + String(irand(1000, 9999));
+  trajLog.unshift({ id, from, to, t: Date.now() });
+  if (trajLog.length > 8) trajLog.pop();
+}
 
-  for (const b of blocks){
-    gHUD.appendChild(el("rect", {
-      x:b.x, y:b.y, width:b.w, height:b.h,
-      fill:"rgba(0,255,120,0.02)",
-      stroke:"rgba(0,255,120,0.22)",
-      "stroke-width":1.2
-    }));
+function defconFromThreat(){
+  /* threat 0..5  ->  DEFCON 5..1 */
+  return clamp(5 - Math.round(threat), 1, 5);
+}
 
-    const title = el("text", { x:b.x + 10, y:b.y + 20, fill:"rgba(0,255,120,0.75)", "font-size":"13" });
-    title.textContent = b.title;
-    gHUD.appendChild(title);
+function fmtUTC(d){
+  const p = n => String(n).padStart(2, "0");
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} UTC`;
+}
 
-    for (let i = 0; i < 5; i++){
-      const line = el("text", {
-        x: b.x + 10,
-        y: b.y + 42 + i * 16,
-        fill: "rgba(0,255,120,0.55)",
-        "font-size":"12"
-      });
-      line.textContent = statusLines[irange(r, 0, statusLines.length - 1)]();
-      gHUD.appendChild(line);
+let statAcc = 0;
+function updateReadouts(dt, now){
+  /* clock every frame */
+  clockEl.textContent = fmtUTC(new Date());
+
+  /* DEFCON */
+  const dc = defconFromThreat();
+  defconNumEl.textContent = dc;
+  defconEl.classList.toggle("alert", dc <= 2);
+
+  /* threat decays toward baseline */
+  threat = Math.max(1.0, threat - dt * 0.00007);
+
+  statAcc += dt;
+  if (statAcc < 600) return;        /* refresh readouts ~1.6Hz */
+  statAcc = 0;
+
+  bandwidth = clamp(bandwidth + rand(-180, 220), 600, 9600);
+  const upMin = Math.floor((now - bootMs) / 60000);
+  const upSec = Math.floor(((now - bootMs) / 1000) % 60);
+  trace = pick(["IDLE","RUN","RUN","TRACE","SCAN"]);
+
+  /* SYSTEM STATUS */
+  setRows(sysReadout, [
+    ["CORE", "ONLINE", false],
+    ["AUTH", dc <= 2 ? "OVERRIDE" : "LCK", dc <= 2],
+    ["UPTIME", `${String(Math.floor((now-bootMs)/3600000)).padStart(2,"0")}:${String(upMin%60).padStart(2,"0")}:${String(upSec).padStart(2,"0")}`, false],
+    ["MEM", irand(62, 97) + "%", false],
+    ["PROC", irand(3, 64) + " THR", false],
+    ["TRACE", trace, trace !== "IDLE"]
+  ]);
+
+  /* NORAD UPLINK */
+  setRows(trafficRead, [
+    ["THRUPUT", bandwidth + " KB/S", false],
+    ["PACKETS", irand(11000, 99000).toLocaleString(), false],
+    ["LATENCY", irand(14, 220) + " MS", false],
+    ["SATCOM", pick(["LOCK","LOCK","SYNC"]), false],
+    ["ACTIVE TK", activeLinks.length, activeLinks.length > 16],
+    ["INTERCEPT", interceptCount, false]
+  ]);
+  drawBars();
+
+  /* TRAJECTORY LOG */
+  const trows = trajLog.map(t => {
+    const li = document.createElement("li");
+    const ago = Math.floor((Date.now() - t.t) / 1000);
+    li.innerHTML = `<span>${t.id}</span><b>${shorten(t.from)}→${shorten(t.to)} ${ago}s</b>`;
+    return li;
+  });
+  replaceRows(targetRead, trows);
+
+  /* bottom counters */
+  counters.innerHTML =
+    `<span>LAUNCH <b>${launchCount}</b></span>` +
+    `<span>ACTIVE <b>${activeLinks.length}</b></span>` +
+    `<span>IMPACT <b>${interceptCount}</b></span>` +
+    `<span>SEISMIC <b>${quakeCount}</b></span>` +
+    `<span>THREAT <b>${threat.toFixed(1)}</b></span>` +
+    `<span>GRID <b>EQUIRECT 1:1</b></span>`;
+}
+function shorten(s){ return s.length > 5 ? s.slice(0,5) : s; }
+
+function setRows(ul, rows){
+  const lis = rows.map(([k,v,warn]) => {
+    const li = document.createElement("li");
+    if (warn) li.className = "warn";
+    li.innerHTML = `<span>${k}</span><b>${v}</b>`;
+    return li;
+  });
+  replaceRows(ul, lis);
+}
+function replaceRows(ul, lis){
+  clearNode(ul);
+  for (const li of lis) ul.appendChild(li);
+}
+
+let barEls = [];
+function drawBars(){
+  if (barEls.length === 0){
+    for (let i = 0; i < 22; i++){
+      const b = document.createElement("div"); b.className = "bar"; b.style.height = "20%";
+      bargraph.appendChild(b); barEls.push(b);
     }
   }
-
-  const footer = el("text", { x: 40, y: 530, fill:"rgba(0,255,120,0.35)", "font-size":"12" });
-  footer.textContent = `SIMULATION MODE: GLOBAL   PROTOCOL: ${pick(r, ["ALPHA", "BRAVO", "DELTA", "SIGMA"])}   CHANNEL: ${irange(r, 1, 9)}`;
-  gHUD.appendChild(footer);
+  for (const b of barEls) b.style.height = irand(8, 100) + "%";
 }
 
-// ---------- Orchestration ----------
-function regenerate(){
-  const density = Number(densityEl.value);
+/* ============================================================
+   TELETYPE — WOPR character
+   ============================================================ */
+const WOPR_LINES = [
+  "GREETINGS PROFESSOR FALKEN.",
+  "SHALL WE PLAY A GAME?",
+  "LOADING GLOBAL THERMONUCLEAR WAR...",
+  "DEFENSE CONDITION RECALCULATED.",
+  "STRATEGIC TRAJECTORIES PLOTTED.",
+  "A STRANGE GAME. THE ONLY WINNING MOVE IS NOT TO PLAY.",
+  "SEISMIC TELEMETRY: USGS UPLINK NOMINAL.",
+  "HOW ABOUT A NICE GAME OF CHESS?"
+];
+let ttIdx = 0;
+function teletypeNext(){
+  if (reduceMotion){ teletype.textContent = WOPR_LINES[ttIdx % WOPR_LINES.length] + " _"; ttIdx++; setTimeout(teletypeNext, 6000); return; }
+  const line = WOPR_LINES[ttIdx % WOPR_LINES.length]; ttIdx++;
+  let i = 0;
+  teletype.textContent = "";
+  const type = () => {
+    if (i <= line.length){
+      teletype.innerHTML = line.slice(0, i) + '<span class="caret">_</span>';
+      i++; setTimeout(type, 42);
+    } else {
+      setTimeout(teletypeNext, 4200);
+    }
+  };
+  type();
+}
 
-  let s = seedEl.value.trim();
-  if (!s){
-    s = String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
+/* ============================================================
+   LIVE USGS EARTHQUAKES — the ONE colour accent
+   ============================================================ */
+const USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson";
+let quakeCount = 0;
+let quakeMarkers = [];   /* {node, mag, born} for pulsing */
+
+async function fetchQuakes(){
+  try {
+    const res = await fetch(USGS_URL, { cache:"no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    renderQuakes(data.features || []);
+    seisLive.textContent = "● LIVE";
+    seisLive.style.removeProperty("color");
+  } catch (err){
+    seisDegraded(err);
   }
-  seedLabel.textContent = `SEED: ${s}`;
-
-  rng = makeRng(s);
-
-  drawGrid(rng, density);
-  drawWorldCoasts(rng);
-  drawHUD(rng);
-
-  // reset sweep and links
-  sweepX = -300;
-  scanSweep.setAttribute("x", String(sweepX));
-
-  clearNode(gLinks);
-  activeLinks = [];
-  spawnTimer = 0;
 }
+
+function seisDegraded(err){
+  seisLive.textContent = "○ NO SIGNAL";
+  clearNode(quakeList);
+  const li = document.createElement("li");
+  li.className = "seis-down";
+  li.textContent = "NO SEISMIC DATA — USGS UPLINK UNREACHABLE";
+  quakeList.appendChild(li);
+  /* keep any existing markers; do not introduce other colour */
+}
+
+function renderQuakes(features){
+  clearNode(gQuakes);
+  quakeMarkers = [];
+  /* sort by magnitude desc, plot all, list top */
+  const feats = features
+    .filter(f => f.geometry && f.geometry.coordinates && f.properties.mag != null)
+    .sort((a,b) => b.properties.mag - a.properties.mag);
+  quakeCount = feats.length;
+
+  for (const f of feats){
+    const [lon, lat] = f.geometry.coordinates;
+    if (lat == null || lon == null) continue;
+    const p = project(lat, lon);
+    const mag = Math.max(0, f.properties.mag);
+    const r = clamp(2 + mag * 1.8, 2, 16);
+    const big = mag >= 4.5;
+    const col = big ? "var(--quake-hot)" : "var(--quake)";
+
+    const ring = el("circle", { cx:p.x, cy:p.y, r:r,
+      fill:"none", stroke:col, "stroke-width":1.3, opacity:0.9,
+      filter:"url(#glowHot)" });
+    const core = el("circle", { cx:p.x, cy:p.y, r:1.6, fill:col, filter:"url(#glowHot)" });
+    gQuakes.appendChild(ring);
+    gQuakes.appendChild(core);
+    quakeMarkers.push({ ring, baseR:r, born: performance.now() + Math.random()*1000 });
+  }
+
+  /* readout list — top 7 */
+  const rows = feats.slice(0, 7).map(f => {
+    const li = document.createElement("li");
+    const mag = f.properties.mag.toFixed(1);
+    const big = f.properties.mag >= 4.5 ? " big" : "";
+    const place = (f.properties.place || "UNKNOWN").toUpperCase()
+      .replace(/^\d+\s*KM\s+/, "").slice(0, 22);
+    li.innerHTML = `<span class="mag${big}">M${mag}</span> <span class="loc">${place}</span>`;
+    return li;
+  });
+  if (rows.length === 0){
+    const li = document.createElement("li"); li.className = "seis-down";
+    li.textContent = "NO EVENTS IN LAST HOUR";
+    quakeList.appendChild(document.createElement("li"));
+    clearNode(quakeList); quakeList.appendChild(li);
+  } else {
+    clearNode(quakeList);
+    for (const li of rows) quakeList.appendChild(li);
+  }
+}
+
+function pulseQuakes(now){
+  for (const q of quakeMarkers){
+    const phase = ((now - q.born) % 2200) / 2200;
+    const r = q.baseR * (1 + phase * 0.7);
+    q.ring.setAttribute("r", r.toFixed(1));
+    q.ring.setAttribute("opacity", (0.9 * (1 - phase)).toFixed(2));
+  }
+}
+
+/* ============================================================
+   MAIN LOOP
+   ============================================================ */
+let paused = false;
+let sweepX = -320;
+let lastT = performance.now();
 
 function tick(now){
-  // clock
-  const d = new Date();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const ss = String(d.getSeconds()).padStart(2, "0");
-  clockEl.textContent = `${hh}:${mm}:${ss}`;
+  const dt = now - lastT;
+  lastT = now;
 
   if (!paused){
-    // sweep
-    sweepX += 18;
-    if (sweepX > 1300) sweepX = -300;
-    scanSweep.setAttribute("x", String(sweepX));
-
-    // flicker and jitter
-    const f = Number(flickerEl.value);
-    const flick = 1 - (Math.random() * f * 0.18);
-    svg.style.opacity = String(flick);
-
-    const j = (Math.random() < f * 0.25) ? (Math.random() * 2 - 1) : 0;
-    svg.style.transform = `translate(${j}px, ${-j}px)`;
-
-    // noise shimmer
-    noise.style.opacity = String(0.04 + Math.random() * 0.06);
-
-    // links
+    if (!reduceMotion){
+      sweepX += 7;
+      if (sweepX > W + 20) sweepX = -320;
+      scanSweep.setAttribute("x", sweepX.toFixed(0));
+      noise.style.opacity = String(0.035 + Math.random() * 0.04);
+    }
+    maybeSpawn(dt);
     updateLinks(now);
+    pulseQuakes(now);
+    updateReadouts(dt, now);
+  } else {
+    clockEl.textContent = fmtUTC(new Date());
   }
-
-  lastT = now;
   requestAnimationFrame(tick);
 }
 
-// events
-regenBtn.addEventListener("click", regenerate);
+/* ============================================================
+   BOOT
+   ============================================================ */
+function build(){
+  drawGrid();
+  drawCoastlines();
+  drawCities();
+  /* seed a few launches so it's alive immediately */
+  for (let i = 0; i < (reduceMotion ? 2 : 6); i++) activeLinks.push(makeLink());
+}
+
+function init(){
+  build();
+  teletypeNext();
+  fetchQuakes();
+  setInterval(fetchQuakes, 60000);   /* refresh seismic each minute */
+  requestAnimationFrame(tick);
+}
 
 pauseBtn.addEventListener("click", () => {
   paused = !paused;
-  pauseBtn.textContent = paused ? "Resume" : "Pause";
+  pauseBtn.textContent = paused ? "▶ RESUME" : "❚❚ PAUSE";
 });
+strikeBtn.addEventListener("click", launchWave);
+window.addEventListener("resize", () => { /* SVG scales via viewBox; nothing needed */ });
 
-seedEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") regenerate();
-});
-
-linksEl.addEventListener("input", () => {
-  // immediate trim if decreased
-  const target = Number(linksEl.value);
-  while (activeLinks.length > target){
-    const L = activeLinks.shift();
-    killLink(L);
-  }
-});
-
-regenerate();
-requestAnimationFrame(tick);
+init();

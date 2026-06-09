@@ -1,137 +1,241 @@
+/* ============================================================
+   WOPR — STRATEGIC AIR COMMAND
+   WarGames war-room vector map. Phosphor green on black.
+   The ONLY non-green/black colour is the live USGS earthquake feed.
+   ============================================================ */
+
 :root{
-  --bg: #030806;
-  --fg: rgba(0, 255, 120, 0.85);
-  --fg2: rgba(0, 255, 120, 0.55);
-  --fg3: rgba(0, 255, 120, 0.25);
-  --glow: rgba(0, 255, 120, 0.35);
-  --font: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --bg:        #020503;
+  --phos:      #36ff7a;          /* primary phosphor */
+  --phos-85:   rgba(54,255,122,0.85);
+  --phos-60:   rgba(54,255,122,0.55);
+  --phos-35:   rgba(54,255,122,0.30);
+  --phos-18:   rgba(54,255,122,0.16);
+  --phos-line: rgba(54,255,122,0.22);
+  --glow:      rgba(54,255,122,0.40);
+
+  /* The single sanctioned accent: live seismic data (NOT used anywhere else). */
+  --quake:     #ff5a2a;
+  --quake-hot: #ffd23a;
+
+  --font: "Courier New", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-*{ box-sizing: border-box; }
+*{ box-sizing:border-box; }
 html,body{ height:100%; }
 body{
   margin:0;
   background:#000;
-  color:var(--fg);
+  color:var(--phos-85);
   font-family:var(--font);
+  text-transform:uppercase;
+  letter-spacing:0.04em;
+  overflow:hidden;
 }
 
 .frame{
   height:100%;
   display:flex;
   flex-direction:column;
-  padding:14px;
-  gap:10px;
+  padding:10px;
+  gap:8px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(54,255,122,0.05), rgba(0,0,0,0.96) 70%),
+    var(--bg);
 }
 
+/* ---------- TOP BAR ---------- */
 .topbar{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  border:1px solid rgba(0,255,120,0.25);
-  padding:10px 12px;
-  background:linear-gradient(to bottom, rgba(0,255,120,0.06), rgba(0,255,120,0.02));
+  border:1px solid var(--phos-line);
+  padding:8px 14px;
+  background:linear-gradient(to bottom, rgba(54,255,122,0.07), rgba(54,255,122,0.01));
 }
-
-.brand{
-  letter-spacing:0.12em;
-  font-size:14px;
-  opacity:0.95;
+.brand{ display:flex; align-items:baseline; gap:14px; }
+.brand-main{
+  font-size:22px; font-weight:700;
+  letter-spacing:0.34em;
+  color:var(--phos);
+  text-shadow:0 0 8px var(--glow), 0 0 18px rgba(54,255,122,0.25);
 }
+.brand-sub{ font-size:10px; color:var(--phos-35); letter-spacing:0.22em; }
 
-.meta{
-  display:flex;
-  gap:10px;
-  align-items:center;
-  opacity:0.9;
-  font-size:12px;
+.meta{ display:flex; align-items:center; gap:14px; font-size:12px; }
+.defcon{
+  border:1px solid var(--phos-line);
+  padding:3px 9px;
+  letter-spacing:0.18em;
+  text-shadow:0 0 6px var(--glow);
 }
-
-.meta .dot{
-  width:6px;
-  height:6px;
-  border-radius:50%;
-  background:rgba(0,255,120,0.7);
+.defcon b{ font-size:15px; color:var(--phos); }
+.defcon.alert{ animation:defconBlink 0.9s steps(2) infinite; }
+@keyframes defconBlink{ 50%{ opacity:0.35; } }
+.dot{
+  width:7px; height:7px; border-radius:50%;
+  background:var(--phos);
   box-shadow:0 0 10px var(--glow);
+  animation:pulseDot 1.4s ease-in-out infinite;
+}
+@keyframes pulseDot{ 50%{ opacity:0.3; } }
+#clock{ color:var(--phos-60); }
+
+/* ---------- BODY GRID ---------- */
+.body{
+  flex:1;
+  display:grid;
+  grid-template-columns:230px minmax(0,1fr) 230px;
+  gap:8px;
+  min-height:0;
 }
 
+.rail{ display:flex; flex-direction:column; gap:8px; min-height:0; overflow:hidden; }
+
+.panel{
+  border:1px solid var(--phos-line);
+  background:linear-gradient(to bottom, rgba(54,255,122,0.045), rgba(54,255,122,0.01));
+  padding:8px 10px;
+  display:flex; flex-direction:column;
+  min-height:0;
+  overflow:hidden;
+  position:relative;
+}
+.panel::before{   /* corner tick */
+  content:""; position:absolute; top:-1px; left:-1px;
+  width:10px; height:10px;
+  border-top:2px solid var(--phos-60); border-left:2px solid var(--phos-60);
+}
+.panel h2{
+  margin:0 0 6px;
+  font-size:11px; font-weight:700;
+  letter-spacing:0.2em;
+  color:var(--phos);
+  text-shadow:0 0 6px var(--glow);
+  display:flex; justify-content:space-between; align-items:center;
+  border-bottom:1px solid var(--phos-18);
+  padding-bottom:4px;
+}
+.live{ font-size:9px; color:var(--phos); animation:pulseDot 1.2s ease-in-out infinite; }
+
+.readout{
+  list-style:none; margin:0; padding:0;
+  font-size:11px; line-height:1.55;
+  color:var(--phos-60);
+  overflow:hidden;
+  flex:1;
+}
+.readout li{ display:flex; justify-content:space-between; gap:8px; white-space:nowrap; }
+.readout li b{ color:var(--phos-85); font-weight:400; text-shadow:0 0 5px var(--glow); }
+.readout li.warn b{ color:var(--phos); animation:pulseDot 0.7s steps(2) infinite; }
+
+.bargraph{
+  margin-top:8px; height:34px;
+  display:flex; align-items:flex-end; gap:2px;
+}
+.bargraph .bar{
+  flex:1; background:var(--phos-35);
+  box-shadow:0 0 5px var(--phos-18);
+  transition:height 0.4s ease;
+}
+
+/* ---------- SEISMIC PANEL (the one coloured surface) ---------- */
+#panelSeis h2{ color:var(--phos); }
+.seis-source{ font-size:9px; color:var(--phos-35); letter-spacing:0.16em; margin-bottom:5px; }
+.quake-list li{ font-size:10.5px; line-height:1.5; }
+.quake-list .mag{
+  color:var(--quake);
+  text-shadow:0 0 7px rgba(255,90,42,0.7);
+  font-weight:700;
+}
+.quake-list .mag.big{ color:var(--quake-hot); text-shadow:0 0 9px rgba(255,210,58,0.8); }
+.quake-list .loc{ color:var(--phos-60); }
+.seis-down{ color:var(--phos-35); font-size:10px; }
+
+/* ---------- SCREEN ---------- */
 .screen{
   position:relative;
-  flex:1;
-  border:1px solid rgba(0,255,120,0.25);
-  background:radial-gradient(circle at 50% 45%, rgba(0,255,120,0.06), rgba(0,0,0,0.95) 60%), var(--bg);
+  border:1px solid var(--phos-line);
+  background:
+    radial-gradient(ellipse at 50% 46%, rgba(54,255,122,0.05), rgba(0,0,0,0.97) 72%),
+    #010402;
   overflow:hidden;
+  min-height:0;
 }
+#v{ width:100%; height:100%; display:block; }
 
-#v{
-  width:100%;
-  height:100%;
-  display:block;
-}
-
-.overlay{
-  position:absolute;
-  inset:0;
-  pointer-events:none;
-}
-
+.overlay{ position:absolute; inset:0; pointer-events:none; }
 .scanlines{
   background:repeating-linear-gradient(
     to bottom,
-    rgba(0,0,0,0.00),
-    rgba(0,0,0,0.00) 2px,
-    rgba(0,0,0,0.25) 3px
-  );
-  mix-blend-mode:multiply;
-  opacity:0.45;
+    rgba(0,0,0,0) 0px,
+    rgba(0,0,0,0) 2px,
+    rgba(0,0,0,0.28) 3px);
+  mix-blend-mode:multiply; opacity:0.5;
 }
-
 .vignette{
-  background:radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%);
-  opacity:0.85;
+  background:radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 52%, rgba(0,0,0,0.6) 100%);
 }
-
 .noise{
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.25'/%3E%3C/svg%3E");
-  opacity:0.06;
-  mix-blend-mode:screen;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='.4'/%3E%3C/svg%3E");
+  opacity:0.05; mix-blend-mode:screen;
 }
 
-.controls{
-  display:flex;
-  gap:12px;
-  align-items:center;
-  flex-wrap:wrap;
-  border:1px solid rgba(0,255,120,0.25);
-  padding:10px 12px;
-  background:linear-gradient(to top, rgba(0,255,120,0.06), rgba(0,255,120,0.02));
+.teletype{
+  position:absolute; left:16px; bottom:14px;
+  font-size:12px; color:var(--phos-85);
+  text-shadow:0 0 6px var(--glow);
+  max-width:60%; line-height:1.5;
+  pointer-events:none;
 }
+.teletype .caret{ animation:pulseDot 0.8s steps(2) infinite; }
 
+/* ---------- BOTTOM BAR ---------- */
+.bottombar{
+  display:flex; align-items:center; gap:14px;
+  border:1px solid var(--phos-line);
+  padding:7px 14px;
+  background:linear-gradient(to top, rgba(54,255,122,0.07), rgba(54,255,122,0.01));
+  font-size:11px;
+}
+.counters{ display:flex; gap:18px; flex:1; flex-wrap:wrap; color:var(--phos-60); }
+.counters span b{ color:var(--phos-85); text-shadow:0 0 5px var(--glow); font-weight:400; }
+.controls{ display:flex; gap:8px; }
 button{
-  font-family:var(--font);
-  color:var(--fg);
-  background:rgba(0,255,120,0.06);
-  border:1px solid rgba(0,255,120,0.25);
-  padding:8px 10px;
-  cursor:pointer;
+  font-family:var(--font); text-transform:uppercase; letter-spacing:0.1em;
+  color:var(--phos-85);
+  background:rgba(54,255,122,0.06);
+  border:1px solid var(--phos-line);
+  padding:6px 11px; cursor:pointer; font-size:11px;
 }
-button:hover{ background:rgba(0,255,120,0.10); }
+button:hover{ background:rgba(54,255,122,0.13); text-shadow:0 0 6px var(--glow); }
+button:active{ background:rgba(54,255,122,0.2); }
+.backlink{
+  color:var(--phos-35); text-decoration:none; font-size:11px;
+  letter-spacing:0.14em; white-space:nowrap;
+}
+.backlink:hover{ color:var(--phos-85); text-shadow:0 0 6px var(--glow); }
 
-label{
-  display:flex;
-  gap:8px;
-  align-items:center;
-  font-size:12px;
-  opacity:0.9;
+/* ---------- RESPONSIVE ---------- */
+@media (max-width:900px){
+  body{ overflow:auto; }
+  .frame{ height:auto; min-height:100%; }
+  .body{ grid-template-columns:1fr; }
+  .screen{ height:54vh; min-height:300px; order:-1; }
+  .rail{ flex-direction:row; flex-wrap:wrap; overflow:visible; }
+  .rail .panel{ flex:1 1 46%; min-width:150px; }
+  .quake-list, .readout{ max-height:160px; }
+  .brand-sub{ display:none; }
+  .bottombar{ flex-wrap:wrap; }
+}
+@media (max-width:520px){
+  .brand-main{ font-size:17px; letter-spacing:0.24em; }
+  .rail .panel{ flex:1 1 100%; }
+  .counters{ font-size:10px; gap:10px; }
 }
 
-input[type="range"]{ width:160px; }
-input[type="text"]{
-  width:110px;
-  font-family:var(--font);
-  color:var(--fg);
-  background:rgba(0,0,0,0.35);
-  border:1px solid rgba(0,255,120,0.25);
-  padding:6px 8px;
+/* ---------- REDUCED MOTION ---------- */
+@media (prefers-reduced-motion:reduce){
+  .dot,.live,.defcon.alert,.readout li.warn b,.teletype .caret{ animation:none !important; }
+  #scanSweep{ display:none; }
 }

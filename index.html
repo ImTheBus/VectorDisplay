@@ -3,83 +3,110 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Wargames Vector Screen</title>
+  <title>WOPR — STRATEGIC AIR COMMAND</title>
+  <meta name="description" content="WarGames WOPR war-room vector map. Green phosphor on black, with live USGS seismic data." />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
   <div class="frame">
+    <!-- ===================== TOP BAR ===================== -->
     <header class="topbar">
-      <div class="brand">WOPR VECTOR DISPLAY</div>
+      <div class="brand">
+        <span class="brand-main">W O P R</span>
+        <span class="brand-sub">WAR OPERATION PLAN RESPONSE</span>
+      </div>
       <div class="meta">
-        <span id="clock">00:00:00</span>
+        <span class="defcon" id="defcon">DEFCON <b id="defconNum">5</b></span>
         <span class="dot"></span>
-        <span id="seedLabel">SEED: 000000</span>
+        <span id="clock">--:--:-- UTC</span>
       </div>
     </header>
 
-    <main class="screen" id="screen">
-      <!-- SVG vectors -->
-      <svg id="v" viewBox="0 0 1000 700" preserveAspectRatio="none" aria-label="vector display">
-        <defs>
-          <filter id="glow">
-            <feGaussianBlur stdDeviation="1.2" result="b"/>
-            <feMerge>
-              <feMergeNode in="b"/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
-          </filter>
+    <!-- ===================== BODY ===================== -->
+    <div class="body">
+      <!-- LEFT RAIL -->
+      <aside class="rail rail-left">
+        <section class="panel" id="panelSys">
+          <h2>SYSTEM STATUS</h2>
+          <ul class="readout" id="sysReadout"></ul>
+        </section>
+        <section class="panel" id="panelTraffic">
+          <h2>NORAD UPLINK</h2>
+          <ul class="readout" id="trafficReadout"></ul>
+          <div class="bargraph" id="bargraph"></div>
+        </section>
+      </aside>
 
-          <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0" stop-color="rgba(0,255,120,0)" />
-            <stop offset="0.5" stop-color="rgba(0,255,120,0.10)" />
-            <stop offset="1" stop-color="rgba(0,255,120,0)" />
-          </linearGradient>
-        </defs>
+      <!-- SCREEN -->
+      <main class="screen" id="screen">
+        <svg id="v" viewBox="0 0 1000 540" preserveAspectRatio="xMidYMid meet" aria-label="WOPR strategic vector map">
+          <defs>
+            <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="1.1" result="b"/>
+              <feMerge>
+                <feMergeNode in="b"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+            <filter id="glowHot" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="2.4" result="b"/>
+              <feMerge>
+                <feMergeNode in="b"/>
+                <feMergeNode in="b"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+            <linearGradient id="sweep" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="rgba(60,255,140,0)" />
+              <stop offset="0.5" stop-color="rgba(60,255,140,0.10)" />
+              <stop offset="1" stop-color="rgba(60,255,140,0)" />
+            </linearGradient>
+          </defs>
 
-        <!-- content groups -->
-      <!-- content groups -->
-      <g id="gGrid"  filter="url(#glow)"></g>
-      <g id="gMap"   filter="url(#glow)"></g>
-      <g id="gLinks" filter="url(#glow)"></g>
-      <g id="gHUD"   filter="url(#glow)"></g>
+          <g id="gGrid"></g>
+          <g id="gMap"   filter="url(#glow)"></g>
+          <g id="gLinks" filter="url(#glow)"></g>
+          <g id="gCities" filter="url(#glow)"></g>
+          <g id="gQuakes"></g>
+          <g id="gHUD"   filter="url(#glow)"></g>
+          <rect id="scanSweep" x="-320" y="0" width="320" height="540" fill="url(#sweep)" opacity="0.6"></rect>
+        </svg>
 
+        <!-- CRT overlays -->
+        <div class="overlay scanlines"></div>
+        <div class="overlay vignette"></div>
+        <div class="overlay noise" id="noise"></div>
 
-        <!-- scan sweep (animated via JS) -->
-        <rect id="scanSweep" x="-300" y="0" width="300" height="700" fill="url(#sweep)" opacity="0.7"></rect>
-      </svg>
+        <!-- boot teletype -->
+        <div class="teletype" id="teletype" aria-hidden="true"></div>
+      </main>
 
-      <!-- CRT overlays -->
-      <div class="overlay scanlines"></div>
-      <div class="overlay vignette"></div>
-      <div class="overlay noise" id="noise"></div>
-    </main>
+      <!-- RIGHT RAIL -->
+      <aside class="rail rail-right">
+        <section class="panel" id="panelSeis">
+          <h2>SEISMIC <span class="live" id="seisLive">● LIVE</span></h2>
+          <div class="seis-source">USGS / ALL_HOUR</div>
+          <ul class="readout quake-list" id="quakeList"></ul>
+        </section>
+        <section class="panel" id="panelTarget">
+          <h2>TRAJECTORY LOG</h2>
+          <ul class="readout" id="targetReadout"></ul>
+        </section>
+      </aside>
+    </div>
 
-    <footer class="controls">
-      <button id="regen">Regenerate</button>
-      <button id="pause">Pause</button>
-
-      <label>
-        Density
-        <input id="density" type="range" min="0.5" max="2.5" step="0.1" value="1.2" />
-      </label>
-
-      <label>
-        Flicker
-        <input id="flicker" type="range" min="0" max="1" step="0.05" value="0.25" />
-      </label>
-      
-      <label>
-        Links
-        <input id="links" type="range" min="0" max="24" step="1" value="10" />
-      </label>
-
-      <label>
-        Seed
-        <input id="seed" type="text" inputmode="numeric" placeholder="auto" />
-      </label>
+    <!-- ===================== BOTTOM BAR ===================== -->
+    <footer class="bottombar">
+      <div class="counters" id="counters"></div>
+      <div class="controls">
+        <button id="pause" title="Pause / resume the cascade">❚❚ PAUSE</button>
+        <button id="strike" title="Launch a wave of trajectories">▶ SIMULATE STRIKE</button>
+      </div>
+      <a class="backlink" href="https://rougvie.com" target="_blank" rel="noopener">◆ rougvie.com</a>
     </footer>
   </div>
 
+  <script src="./coastline.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
